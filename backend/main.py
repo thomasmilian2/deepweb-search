@@ -59,7 +59,11 @@ async def root():
 
 @app.get("/health")
 async def health_check():
-    db_status = "ok" if get_searches_collection() is not None else "disconnected"
+    try:
+        db = get_database()
+        db_status = "ok" if db is not None else "disconnected"
+    except:
+        db_status = "disconnected"
     return {
         "api": "ok",
         "database": db_status,
