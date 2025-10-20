@@ -1,6 +1,7 @@
 import asyncio
 from typing import List, Dict, Any
 from urllib.parse import urlparse, parse_qs, unquote
+import re
 
 import aiohttp
 from bs4 import BeautifulSoup
@@ -29,12 +30,22 @@ def _extract_result_url(raw_href: str) -> str:
     return raw_href
 
 
+def _extract_domain(url: str) -> str:
+    """Extract domain from URL for metadata"""
+    try:
+        parsed = urlparse(url)
+        return parsed.netloc.replace('www.', '')
+    except:
+        return ""
+
+
 async def search_duckduckgo(
     query: str,
     *,
     languages: List[str],
-    max_results: int = 5,
-    timeout_seconds: int = 10,
+    max_results: int = 20,
+    timeout_seconds: int = 15,
+    retry_count: int = 2,
 ) -> List[Dict[str, Any]]:
     """
     Retrieve organic search results from DuckDuckGo's HTML endpoint.
@@ -43,11 +54,12 @@ async def search_duckduckgo(
         query: The search terms.
         languages: Preferred languages (best effort; DDG does not expose
             per-result language, so we tag the first requested language).
-        max_results: Maximum number of results to return.
+        max_results: Maximum number of results to return (increased to 20 default).
         timeout_seconds: HTTP request timeout.
+        retry_count: Number of retries on failure.
 
     Returns:
-        A list of dictionaries with title, url, snippet, source and language.
+        A list of dictionaries with title, url, snippet, source, language and metadata.
     """
     headers = {
         "User-Agent": (
@@ -59,19 +71,29 @@ async def search_duckduckgo(
     params = {"q": query}
     primary_language = languages[0] if languages else "unknown"
 
-    async with aiohttp.ClientSession(headers=headers) as session:
+    # Retry logic
+    for attempt in range(retry_count + 1):
         try:
-            async with session.get(
-                DUCKDUCKGO_HTML_ENDPOINT,
-                params=params,
-                timeout=timeout_seconds,
-            ) as response:
-                response.raise_for_status()
-                html = await response.text()
+            async with aiohttp.ClientSession(headers=headers) as session:
+                async with session.get(
+                    DUCKDUCKGO_HTML_ENDPOINT,
+                    params=params,
+                    timeout=timeout_seconds,
+                ) as response:
+                    response.raise_for_status()
+                    html = await response.text()
+            
+            # If successful, break out of retry loop
+            break
+            
         except asyncio.TimeoutError as exc:
-            raise RuntimeError("DuckDuckGo request timed out") from exc
+            if attempt == retry_count:
+                raise RuntimeError("DuckDuckGo request timed out after retries") from exc
+            await asyncio.sleep(1)  # Wait before retry
         except aiohttp.ClientError as exc:
-            raise RuntimeError(f"DuckDuckGo request failed: {exc}") from exc
+            if attempt == retry_count:
+                raise RuntimeError(f"DuckDuckGo request failed: {exc}") from exc
+            await asyncio.sleep(1)
 
     soup = BeautifulSoup(html, "html.parser")
     results: List[Dict[str, Any]] = []
@@ -90,6 +112,17 @@ async def search_duckduckgo(
         if not url:
             continue
 
+        # Extract domain for metadata
+        domain = _extract_domain(url)
+        
+        # Build metadata
+        metadata = {
+            "domain": domain,
+            "favicon_url": f"https://www.google.com/s2/favicons?domain={domain}&sz=32",
+            "position": len(results) + 1,
+            "has_snippet": bool(snippet)
+        }
+
         results.append(
             {
                 "title": title,
@@ -97,6 +130,8 @@ async def search_duckduckgo(
                 "snippet": snippet,
                 "source": "duckduckgo",
                 "language": primary_language,
+                "metadata": metadata,
+                "score": 1.0  # Will be recalculated by ranking service
             }
         )
 
