@@ -45,3 +45,7 @@ docker-compose.override.yml
 *.sqlite
 data/
 logs/
+-e 
+# Environment files
+*.env
+*.env.*
