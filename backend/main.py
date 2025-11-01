@@ -214,7 +214,7 @@ async def get_history(limit: int = 50, skip: int = 0):
     """Get search history with pagination"""
     try:
         searches_collection = get_searches_collection()
-        if not searches_collection:
+        if searches_collection is None:
             return {"history": [], "total": 0}
         
         # Get total count
