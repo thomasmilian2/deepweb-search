@@ -2,6 +2,7 @@
   "name": "deepweb-search-frontend",
   "version": "1.0.0",
   "private": true,
+  "proxy": "http://localhost:8001",
   "dependencies": {
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
