@@ -182,7 +182,7 @@ async def search(request: SearchRequest, http_request: Request):
     # Save to database
     try:
         searches_collection = get_searches_collection()
-        if searches_collection:
+        if searches_collection is not None:
             search_record = SearchRecord(
                 query=request.query,
                 mode=request.mode,
