@@ -2,6 +2,9 @@ from motor.motor_asyncio import AsyncIOMotorClient
 from pymongo.errors import ConnectionFailure
 import os
 from datetime import datetime
+from dotenv import load_dotenv
+
+load_dotenv()
 
 MONGO_URL = os.environ.get('MONGO_URL', 'mongodb://localhost:27017')
 DB_NAME = 'deepweb_search'
