@@ -198,7 +198,7 @@ async def search(request: SearchRequest, http_request: Request):
             
             # Save results to results collection
             results_collection = get_results_collection()
-            if results_collection and results:
+            if results_collection is not None and results:
                 results_with_search_id = [
                     {**r, "search_id": str(result.inserted_id), "timestamp": datetime.utcnow()}
                     for r in results
