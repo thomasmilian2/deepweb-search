@@ -31,13 +31,13 @@ def get_database():
 
 # Collections
 def get_searches_collection():
-    return db.searches if db else None
+    return db.searches if db is not None else None
 
 def get_results_collection():
-    return db.results if db else None
+    return db.results if db is not None else None
 
 def get_analytics_collection():
-    return db.analytics if db else None
+    return db.analytics if db is not None else None
 
 def get_saved_searches_collection():
-    return db.saved_searches if db else None
+    return db.saved_searches if db is not None else None
