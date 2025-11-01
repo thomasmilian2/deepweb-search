@@ -374,7 +374,7 @@ async def get_related_searches(query: str, limit: int = 5):
         keywords = analysis["keywords"]
         
         searches_collection = get_searches_collection()
-        if not searches_collection or not keywords:
+        if searches_collection is None or not keywords:
             return {"related": []}
         
         # Find queries with similar keywords
