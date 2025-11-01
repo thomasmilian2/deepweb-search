@@ -244,7 +244,7 @@ async def get_analytics(days: int = 7):
     """Get analytics for the dashboard"""
     try:
         searches_collection = get_searches_collection()
-        if not searches_collection:
+        if searches_collection is None:
             return {"error": "Database not connected"}
         
         # Calculate date range
