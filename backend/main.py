@@ -343,7 +343,7 @@ async def get_suggestions(q: str, limit: int = 5):
     
     try:
         searches_collection = get_searches_collection()
-        if not searches_collection:
+        if searches_collection is None:
             return {"suggestions": []}
         
         # Find queries that start with or contain the input
