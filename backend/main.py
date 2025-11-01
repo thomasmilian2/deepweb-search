@@ -193,7 +193,7 @@ async def search(request: SearchRequest, http_request: Request):
                 duration_ms=duration_ms,
                 user_ip=http_request.client.host if http_request.client else None
             )
-            result = await searches_collection.insert_one(search_record.dict())
+            result = await searches_collection.insert_one(search_record.model_dump())
             response_data["search_id"] = str(result.inserted_id)
             
             # Save results to results collection
