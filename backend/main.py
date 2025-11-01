@@ -404,7 +404,7 @@ async def save_search(saved_search: dict):
     """Save a search for later"""
     try:
         saved_searches_collection = get_saved_searches_collection()
-        if not saved_searches_collection:
+        if saved_searches_collection is None:
             raise HTTPException(status_code=503, detail="Database not available")
         
         saved = SavedSearch(
@@ -429,7 +429,7 @@ async def get_saved_searches():
     """Get all saved searches"""
     try:
         saved_searches_collection = get_saved_searches_collection()
-        if not saved_searches_collection:
+        if saved_searches_collection is None:
             return {"saved_searches": []}
         
         cursor = saved_searches_collection.find().sort("created_at", -1)
@@ -450,7 +450,7 @@ async def delete_saved_search(saved_id: str):
     """Delete a saved search"""
     try:
         saved_searches_collection = get_saved_searches_collection()
-        if not saved_searches_collection:
+        if saved_searches_collection is None:
             raise HTTPException(status_code=503, detail="Database not available")
         
         result = await saved_searches_collection.delete_one({"saved_id": saved_id})
