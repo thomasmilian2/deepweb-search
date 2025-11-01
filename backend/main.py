@@ -414,7 +414,7 @@ async def save_search(saved_search: dict):
             tags=saved_search.get("tags", [])
         )
         
-        result = await saved_searches_collection.insert_one(saved.dict())
+        result = await saved_searches_collection.insert_one(saved.model_dump())
         
         return {
             "saved_id": saved.saved_id,
