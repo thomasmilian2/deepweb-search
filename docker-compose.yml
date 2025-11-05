@@ -16,11 +16,13 @@ services:
     ports:
       - "8005:8000"
     environment:
+      - MONGO_URL=mongodb://mongo:27017
       - DATABASE_URL=postgresql://user:SecureP@ss123@postgres:5432/deepweb_search
       - ELASTICSEARCH_URL=http://elasticsearch:9200
       - REDIS_URL=redis://redis:6379
       - TOR_PROXY=socks5h://tor-proxy:9050
     depends_on:
+      - mongo
       - postgres
       - elasticsearch
       - redis
@@ -33,6 +35,15 @@ services:
     ports:
       - "9050:9050"
       - "9051:9051"
+
+  mongo:
+    image: mongo:7
+    environment:
+      - MONGO_INITDB_DATABASE=deepweb_search
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
 
   elasticsearch:
     image: elasticsearch:8.11.0
@@ -64,3 +75,4 @@ services:
 volumes:
   es_data:
   pg_data:
+  mongo_data:

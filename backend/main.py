@@ -7,8 +7,9 @@ import time
 
 from models import SearchRequest, SearchRecord, QueryAnalysis, SavedSearch
 from database import (
-    connect_to_mongo, 
-    close_mongo_connection, 
+    connect_to_mongo,
+    close_mongo_connection,
+    get_database,
     get_searches_collection,
     get_results_collection,
     get_analytics_collection,
