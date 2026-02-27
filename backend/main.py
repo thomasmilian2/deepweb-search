@@ -116,7 +116,7 @@ async def health_check():
 
 @app.post("/auth/register", response_model=Token)
 @limiter.limit("5/minute")
-async def register(http_request: Request, user_data: UserRegister):
+async def register(request: Request, user_data: UserRegister):
     """Register a new user and return an access token."""
     users_col = get_users_collection()
     if users_col is None:
@@ -139,7 +139,7 @@ async def register(http_request: Request, user_data: UserRegister):
 
 @app.post("/auth/token", response_model=Token)
 @limiter.limit("10/minute")
-async def login(http_request: Request, form_data: OAuth2PasswordRequestForm = Depends()):
+async def login(request: Request, form_data: OAuth2PasswordRequestForm = Depends()):
     """Authenticate with username + password and return an access token."""
     users_col = get_users_collection()
     if users_col is None:
@@ -171,41 +171,41 @@ async def get_me(current_user: dict = Depends(get_current_user)):
 
 @app.post("/api/analyze")
 @limiter.limit("30/minute")
-async def analyze_query(http_request: Request, request: AnalyzeRequest):
+async def analyze_query(request: Request, body: AnalyzeRequest):
     """Analyze a search query to extract intent, keywords, and suggestions"""
-    analysis = query_analyzer.analyze(request.query)
+    analysis = query_analyzer.analyze(body.query)
     return {"analysis": analysis}
 
 @app.post("/api/search")
 @limiter.limit("10/minute")
 async def search(
-    request: SearchRequest,
-    http_request: Request,
+    request: Request,
+    search_req: SearchRequest,
     current_user: Optional[dict] = Depends(get_optional_user),
 ):
     """Main search endpoint with caching, ranking, and persistence"""
     start_time = time.time()
-    
-    if not request.sources:
+
+    if not search_req.sources:
         raise HTTPException(status_code=400, detail="At least one source must be selected.")
-    
+
     # Check cache first
     cached_result = await cache.get(
-        request.query,
-        request.sources,
-        request.languages,
-        request.max_results,
+        search_req.query,
+        search_req.sources,
+        search_req.languages,
+        search_req.max_results,
     )
-    
+
     if cached_result:
         # Add cache hit marker
         cached_result["from_cache"] = True
         cached_result["cache_hit"] = True
         return cached_result
-    
+
     # Perform search
     handlers: Dict[str, Callable[..., Awaitable[List[Dict[str, Any]]]]] = {}
-    for source in request.sources:
+    for source in search_req.sources:
         handler = SUPPORTED_SOURCES.get(source)
         if handler:
             handlers[source] = handler
@@ -216,9 +216,9 @@ async def search(
     tasks = {
         source: asyncio.create_task(
             handler(
-                request.query,
-                languages=request.languages,
-                max_results=request.max_results,
+                search_req.query,
+                languages=search_req.languages,
+                max_results=search_req.max_results,
             )
         )
         for source, handler in handlers.items()
@@ -236,16 +236,16 @@ async def search(
 
     # Deduplicate results
     results = ranking_service.deduplicate_results(results)
-    
+
     # Rank results
-    results = ranking_service.rank_results(results, request.query)
-    
+    results = ranking_service.rank_results(results, search_req.query)
+
     # Pagination
     total_results = len(results)
-    start_idx = (request.page - 1) * request.page_size
-    end_idx = start_idx + request.page_size
+    start_idx = (search_req.page - 1) * search_req.page_size
+    end_idx = start_idx + search_req.page_size
     paginated_results = results[start_idx:end_idx]
-    
+
     status = "completed"
     if errors and results:
         status = "partial"
@@ -253,46 +253,46 @@ async def search(
         status = "failed"
 
     duration_ms = (time.time() - start_time) * 1000
-    
+
     response_data = {
         "search_id": None,
-        "query": request.query,
-        "mode": request.mode,
+        "query": search_req.query,
+        "mode": search_req.mode,
         "status": status,
-        "requested_sources": request.sources,
+        "requested_sources": search_req.sources,
         "errors": errors or None,
         "results_count": len(paginated_results),
         "total_results": total_results,
-        "page": request.page,
-        "page_size": request.page_size,
-        "total_pages": (total_results + request.page_size - 1) // request.page_size,
+        "page": search_req.page,
+        "page_size": search_req.page_size,
+        "total_pages": (total_results + search_req.page_size - 1) // search_req.page_size,
         "results": paginated_results,
         "duration_ms": round(duration_ms, 2),
         "from_cache": False
     }
-    
+
     # Save to cache
     await cache.set(
-        request.query,
-        request.sources,
-        request.languages,
-        request.max_results,
+        search_req.query,
+        search_req.sources,
+        search_req.languages,
+        search_req.max_results,
         response_data,
     )
-    
+
     # Save to database
     try:
         searches_collection = get_searches_collection()
         if searches_collection is not None:
             search_record = SearchRecord(
-                query=request.query,
-                mode=request.mode,
-                languages=request.languages,
-                sources=request.sources,
+                query=search_req.query,
+                mode=search_req.mode,
+                languages=search_req.languages,
+                sources=search_req.sources,
                 status=status,
                 results_count=total_results,
                 duration_ms=duration_ms,
-                user_ip=http_request.client.host if http_request.client else None,
+                user_ip=request.client.host if request.client else None,
                 user_id=current_user["user_id"] if current_user else None,
             )
             result = await searches_collection.insert_one(search_record.model_dump())
