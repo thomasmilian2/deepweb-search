@@ -1,5 +1,6 @@
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
@@ -9,6 +10,10 @@ import asyncio
 import time
 import re
 import os
+from logging_config import setup_logging, get_logger
+
+setup_logging()
+logger = get_logger(__name__)
 
 from models import SearchRequest, SearchRecord, QueryAnalysis, SavedSearch, AnalyzeRequest, SaveSearchRequest
 from database import (
@@ -29,6 +34,23 @@ limiter = Limiter(key_func=get_remote_address)
 app = FastAPI(title="DeepWeb Search API", version="2.0.0")
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+@app.middleware("http")
+async def log_requests(request: Request, call_next: Callable) -> Response:
+    start = time.time()
+    response = await call_next(request)
+    duration_ms = round((time.time() - start) * 1000, 2)
+    logger.info(
+        "HTTP request",
+        extra={
+            "method": request.method,
+            "path": request.url.path,
+            "status_code": response.status_code,
+            "duration_ms": duration_ms,
+            "client_ip": request.client.host if request.client else None,
+        },
+    )
+    return response
 
 _cors_origins = os.getenv("CORS_ORIGINS", "http://localhost:3000").split(",")
 app.add_middleware(
@@ -213,7 +235,7 @@ async def search(request: SearchRequest, http_request: Request):
                 ]
                 await results_collection.insert_many(results_with_search_id)
     except Exception as e:
-        print(f"Error saving to database: {e}")
+        logger.error("Error saving search to database", extra={"error": str(e)})
     
     return response_data
 
@@ -245,7 +267,7 @@ async def get_history(request: Request, limit: int = 50, skip: int = 0):
             "skip": skip
         }
     except Exception as e:
-        print(f"Error fetching history: {e}")
+        logger.error("Error fetching history", extra={"error": str(e)})
         return {"history": [], "total": 0}
 
 @app.get("/api/analytics")
@@ -342,7 +364,7 @@ async def get_analytics(request: Request, days: int = 7):
             "cache_stats": cache.get_stats()
         }
     except Exception as e:
-        print(f"Error fetching analytics: {e}")
+        logger.error("Error fetching analytics", extra={"error": str(e)})
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/suggestions")
@@ -371,7 +393,7 @@ async def get_suggestions(request: Request, q: str, limit: int = 5):
         
         return {"suggestions": suggestions}
     except Exception as e:
-        print(f"Error fetching suggestions: {e}")
+        logger.error("Error fetching suggestions", extra={"error": str(e)})
         return {"suggestions": []}
 
 @app.get("/api/related")
@@ -411,7 +433,7 @@ async def get_related_searches(request: Request, query: str, limit: int = 5):
         
         return {"related": related, "based_on_keywords": keywords[:3]}
     except Exception as e:
-        print(f"Error fetching related searches: {e}")
+        logger.error("Error fetching related searches", extra={"error": str(e)})
         return {"related": []}
 
 @app.post("/api/saved-searches")
@@ -437,7 +459,7 @@ async def save_search(request: Request, saved_search: SaveSearchRequest):
             "message": "Search saved successfully"
         }
     except Exception as e:
-        print(f"Error saving search: {e}")
+        logger.error("Error saving search", extra={"error": str(e)})
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/saved-searches")
@@ -459,7 +481,7 @@ async def get_saved_searches(request: Request):
         
         return {"saved_searches": saved_searches}
     except Exception as e:
-        print(f"Error fetching saved searches: {e}")
+        logger.error("Error fetching saved searches", extra={"error": str(e)})
         return {"saved_searches": []}
 
 @app.delete("/api/saved-searches/{saved_id}")
@@ -478,7 +500,7 @@ async def delete_saved_search(request: Request, saved_id: str):
         
         return {"message": "Saved search deleted successfully"}
     except Exception as e:
-        print(f"Error deleting saved search: {e}")
+        logger.error("Error deleting saved search", extra={"error": str(e), "saved_id": saved_id})
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.websocket("/ws/search")

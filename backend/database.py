@@ -3,8 +3,11 @@ from pymongo.errors import ConnectionFailure
 import os
 from datetime import datetime
 from dotenv import load_dotenv
+from logging_config import get_logger
 
 load_dotenv()
+
+logger = get_logger(__name__)
 
 MONGO_URL = os.environ.get('MONGO_URL', 'mongodb://localhost:27017')
 DB_NAME = 'deepweb_search'
@@ -18,16 +21,16 @@ async def connect_to_mongo():
         client = AsyncIOMotorClient(MONGO_URL)
         db = client[DB_NAME]
         await client.admin.command('ping')
-        print(f"✅ Connected to MongoDB at {MONGO_URL}")
+        logger.info("Connected to MongoDB", extra={"mongo_url": MONGO_URL})
     except ConnectionFailure as e:
-        print(f"❌ MongoDB connection failed: {e}")
+        logger.error("MongoDB connection failed", extra={"error": str(e)})
         db = None
 
 async def close_mongo_connection():
     global client
     if client:
         client.close()
-        print("MongoDB connection closed")
+        logger.info("MongoDB connection closed")
 
 def get_database():
     return db
