@@ -21,6 +21,8 @@ services:
       - ELASTICSEARCH_URL=http://elasticsearch:9200
       - REDIS_URL=redis://redis:6379
       - TOR_PROXY=socks5h://tor-proxy:9050
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
+      - GOOGLE_CSE_ID=${GOOGLE_CSE_ID:-}
       - CORS_ORIGINS=http://localhost:3000
       - LOG_LEVEL=INFO
       - LOG_FORMAT=json

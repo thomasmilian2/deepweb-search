@@ -38,7 +38,7 @@ from auth import (
 from cache_service import cache
 from query_analyzer import query_analyzer
 from ranking_service import ranking_service
-from sources import search_duckduckgo
+from sources import search_duckduckgo, search_google
 
 limiter = Limiter(key_func=get_remote_address)
 app = FastAPI(title="DeepWeb Search API", version="2.0.0")
@@ -73,6 +73,7 @@ app.add_middleware(
 
 SUPPORTED_SOURCES: Dict[str, Callable[..., Awaitable[List[Dict[str, Any]]]]] = {
     "duckduckgo": search_duckduckgo,
+    "google": search_google,
 }
 
 @app.on_event("startup")
@@ -271,14 +272,15 @@ async def search(
         "from_cache": False
     }
 
-    # Save to cache
-    await cache.set(
-        search_req.query,
-        search_req.sources,
-        search_req.languages,
-        search_req.max_results,
-        response_data,
-    )
+    # Save to cache only on successful results
+    if status != "failed":
+        await cache.set(
+            search_req.query,
+            search_req.sources,
+            search_req.languages,
+            search_req.max_results,
+            response_data,
+        )
 
     # Save to database
     try:
