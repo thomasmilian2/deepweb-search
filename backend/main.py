@@ -78,10 +78,12 @@ SUPPORTED_SOURCES: Dict[str, Callable[..., Awaitable[List[Dict[str, Any]]]]] = {
 @app.on_event("startup")
 async def startup_event():
     await connect_to_mongo()
+    await cache.init()
 
 @app.on_event("shutdown")
 async def shutdown_event():
     await close_mongo_connection()
+    await cache.close()
 
 @app.get("/")
 async def root():
@@ -109,7 +111,7 @@ async def health_check():
     return {
         "api": "ok",
         "database": db_status,
-        "cache": cache.get_stats()
+        "cache": await cache.get_stats()
     }
 
 @app.post("/auth/register", response_model=Token)
@@ -188,11 +190,11 @@ async def search(
         raise HTTPException(status_code=400, detail="At least one source must be selected.")
     
     # Check cache first
-    cached_result = cache.get(
-        request.query, 
-        request.sources, 
-        request.languages, 
-        request.max_results
+    cached_result = await cache.get(
+        request.query,
+        request.sources,
+        request.languages,
+        request.max_results,
     )
     
     if cached_result:
@@ -270,12 +272,12 @@ async def search(
     }
     
     # Save to cache
-    cache.set(
+    await cache.set(
         request.query,
         request.sources,
         request.languages,
         request.max_results,
-        response_data
+        response_data,
     )
     
     # Save to database
@@ -440,7 +442,7 @@ async def get_analytics(
             "searches_timeline": searches_timeline,
             "avg_duration_ms": round(avg_duration, 2) if avg_duration else 0,
             "languages_usage": languages_usage,
-            "cache_stats": cache.get_stats()
+            "cache_stats": await cache.get_stats()
         }
     except Exception as e:
         logger.error("Error fetching analytics", extra={"error": str(e)})
