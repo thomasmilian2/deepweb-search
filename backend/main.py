@@ -4,8 +4,10 @@ from typing import List, Dict, Callable, Awaitable, Any, Optional
 from datetime import datetime, timedelta
 import asyncio
 import time
+import re
+import os
 
-from models import SearchRequest, SearchRecord, QueryAnalysis, SavedSearch
+from models import SearchRequest, SearchRecord, QueryAnalysis, SavedSearch, AnalyzeRequest, SaveSearchRequest
 from database import (
     connect_to_mongo,
     close_mongo_connection,
@@ -22,12 +24,13 @@ from sources import search_duckduckgo
 
 app = FastAPI(title="DeepWeb Search API", version="2.0.0")
 
+_cors_origins = os.getenv("CORS_ORIGINS", "http://localhost:3000").split(",")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_cors_origins,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "DELETE"],
+    allow_headers=["Content-Type", "Authorization"],
 )
 
 SUPPORTED_SOURCES: Dict[str, Callable[..., Awaitable[List[Dict[str, Any]]]]] = {
@@ -72,13 +75,9 @@ async def health_check():
     }
 
 @app.post("/api/analyze")
-async def analyze_query(request: dict):
+async def analyze_query(request: AnalyzeRequest):
     """Analyze a search query to extract intent, keywords, and suggestions"""
-    query = request.get("query", "")
-    if not query:
-        raise HTTPException(status_code=400, detail="Query is required")
-    
-    analysis = query_analyzer.analyze(query)
+    analysis = query_analyzer.analyze(request.query)
     return {"analysis": analysis}
 
 @app.post("/api/search")
@@ -348,8 +347,9 @@ async def get_suggestions(q: str, limit: int = 5):
             return {"suggestions": []}
         
         # Find queries that start with or contain the input
+        q_escaped = re.escape(q)
         pipeline = [
-            {"$match": {"query": {"$regex": f".*{q}.*", "$options": "i"}}},
+            {"$match": {"query": {"$regex": f".*{q_escaped}.*", "$options": "i"}}},
             {"$group": {"_id": "$query", "count": {"$sum": 1}}},
             {"$sort": {"count": -1}},
             {"$limit": limit}
@@ -379,12 +379,14 @@ async def get_related_searches(query: str, limit: int = 5):
             return {"related": []}
         
         # Find queries with similar keywords
-        keyword_regex = "|".join(keywords[:3])  # Use top 3 keywords
+        keyword_regex = "|".join(re.escape(k) for k in keywords[:3])  # Use top 3 keywords
         pipeline = [
             {
                 "$match": {
-                    "query": {"$regex": keyword_regex, "$options": "i"},
-                    "query": {"$ne": query}  # Exclude exact match
+                    "$and": [
+                        {"query": {"$regex": keyword_regex, "$options": "i"}},
+                        {"query": {"$ne": query}}  # Exclude exact match
+                    ]
                 }
             },
             {"$group": {"_id": "$query", "count": {"$sum": 1}}},
@@ -401,18 +403,18 @@ async def get_related_searches(query: str, limit: int = 5):
         return {"related": []}
 
 @app.post("/api/saved-searches")
-async def save_search(saved_search: dict):
+async def save_search(saved_search: SaveSearchRequest):
     """Save a search for later"""
     try:
         saved_searches_collection = get_saved_searches_collection()
         if saved_searches_collection is None:
             raise HTTPException(status_code=503, detail="Database not available")
-        
+
         saved = SavedSearch(
-            query=saved_search.get("query"),
-            filters=saved_search.get("filters", {}),
-            name=saved_search.get("name"),
-            tags=saved_search.get("tags", [])
+            query=saved_search.query,
+            filters=saved_search.filters,
+            name=saved_search.name,
+            tags=saved_search.tags
         )
         
         result = await saved_searches_collection.insert_one(saved.model_dump())
@@ -471,31 +473,60 @@ async def websocket_search(websocket: WebSocket):
     try:
         while True:
             data = await websocket.receive_json()
-            
+
+            query = data.get("query", "").strip()
+            sources = data.get("sources", ["duckduckgo"])
+            languages = data.get("languages", ["en", "it"])
+            max_results = min(int(data.get("max_results", 20)), 100)
+
+            if not query:
+                await websocket.send_json({"type": "error", "message": "Query is required"})
+                continue
+
             await websocket.send_json({
                 "type": "started",
                 "message": "Search started",
-                "query": data.get("query")
+                "query": query
             })
-            
-            await asyncio.sleep(1)
-            
-            await websocket.send_json({
-                "type": "result",
-                "index": 0,
-                "data": {
-                    "title": "Real-time Result",
-                    "url": "https://example.com",
-                    "snippet": "This is a real-time search result",
-                    "source": "clearnet"
-                }
-            })
-            
-            await asyncio.sleep(1)
-            
+
+            all_results: List[Dict[str, Any]] = []
+            result_index = 0
+
+            for source in sources:
+                handler = SUPPORTED_SOURCES.get(source)
+                if handler is None:
+                    await websocket.send_json({
+                        "type": "source_error",
+                        "source": source,
+                        "message": "Source not supported"
+                    })
+                    continue
+                try:
+                    source_results = await handler(query, languages=languages, max_results=max_results)
+                    all_results.extend(source_results)
+                    for result in source_results:
+                        await websocket.send_json({
+                            "type": "result",
+                            "index": result_index,
+                            "source": source,
+                            "data": result
+                        })
+                        result_index += 1
+                except Exception as exc:
+                    await websocket.send_json({
+                        "type": "source_error",
+                        "source": source,
+                        "message": str(exc)
+                    })
+
+            ranked = ranking_service.rank_results(
+                ranking_service.deduplicate_results(all_results),
+                query
+            )
+
             await websocket.send_json({
                 "type": "completed",
-                "total_results": 1
+                "total_results": len(ranked)
             })
     except WebSocketDisconnect:
         pass

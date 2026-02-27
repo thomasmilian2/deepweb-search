@@ -55,3 +55,12 @@ class SavedSearch(BaseModel):
     tags: List[str] = []
     created_at: datetime = Field(default_factory=datetime.utcnow)
     last_executed: Optional[datetime] = None
+
+class AnalyzeRequest(BaseModel):
+    query: str
+
+class SaveSearchRequest(BaseModel):
+    query: str
+    filters: Dict[str, Any] = {}
+    name: Optional[str] = None
+    tags: List[str] = []
