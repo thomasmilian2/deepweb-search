@@ -47,3 +47,6 @@ def get_analytics_collection():
 
 def get_saved_searches_collection():
     return db.saved_searches if db is not None else None
+
+def get_users_collection():
+    return db.users if db is not None else None

@@ -24,6 +24,7 @@ services:
       - CORS_ORIGINS=http://localhost:3000
       - LOG_LEVEL=INFO
       - LOG_FORMAT=json
+      - ACCESS_TOKEN_EXPIRE_MINUTES=60
     depends_on:
       - mongo
       - postgres

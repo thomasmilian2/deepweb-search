@@ -33,6 +33,7 @@ class SearchRecord(BaseModel):
     timestamp: datetime = Field(default_factory=datetime.utcnow)
     duration_ms: Optional[float] = None
     user_ip: Optional[str] = None
+    user_id: Optional[str] = None
 
 class QueryAnalysis(BaseModel):
     query: str
@@ -55,6 +56,7 @@ class SavedSearch(BaseModel):
     tags: List[str] = []
     created_at: datetime = Field(default_factory=datetime.utcnow)
     last_executed: Optional[datetime] = None
+    user_id: Optional[str] = None
 
 class AnalyzeRequest(BaseModel):
     query: str
@@ -64,3 +66,20 @@ class SaveSearchRequest(BaseModel):
     filters: Dict[str, Any] = {}
     name: Optional[str] = None
     tags: List[str] = []
+
+class UserRegister(BaseModel):
+    username: str = Field(min_length=3, max_length=50, pattern=r"^[a-zA-Z0-9_]+$")
+    password: str = Field(min_length=8)
+    email: Optional[str] = None
+
+class UserInDB(BaseModel):
+    user_id: str = Field(default_factory=lambda: str(uuid4()))
+    username: str
+    email: Optional[str] = None
+    hashed_password: str
+    is_active: bool = True
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+class Token(BaseModel):
+    access_token: str
+    token_type: str = "bearer"

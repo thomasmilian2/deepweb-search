@@ -1,6 +1,7 @@
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Request
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Request, Depends, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
+from fastapi.security import OAuth2PasswordRequestForm
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
@@ -15,7 +16,11 @@ from logging_config import setup_logging, get_logger
 setup_logging()
 logger = get_logger(__name__)
 
-from models import SearchRequest, SearchRecord, QueryAnalysis, SavedSearch, AnalyzeRequest, SaveSearchRequest
+from models import (
+    SearchRequest, SearchRecord, QueryAnalysis, SavedSearch,
+    AnalyzeRequest, SaveSearchRequest,
+    UserRegister, UserInDB, Token,
+)
 from database import (
     connect_to_mongo,
     close_mongo_connection,
@@ -23,7 +28,12 @@ from database import (
     get_searches_collection,
     get_results_collection,
     get_analytics_collection,
-    get_saved_searches_collection
+    get_saved_searches_collection,
+    get_users_collection,
+)
+from auth import (
+    verify_password, hash_password, create_access_token,
+    get_current_user, get_optional_user,
 )
 from cache_service import cache
 from query_analyzer import query_analyzer
@@ -102,6 +112,61 @@ async def health_check():
         "cache": cache.get_stats()
     }
 
+@app.post("/auth/register", response_model=Token)
+@limiter.limit("5/minute")
+async def register(http_request: Request, user_data: UserRegister):
+    """Register a new user and return an access token."""
+    users_col = get_users_collection()
+    if users_col is None:
+        raise HTTPException(status_code=503, detail="Database not available")
+
+    if await users_col.find_one({"username": user_data.username}):
+        raise HTTPException(status_code=409, detail="Username already taken")
+
+    user = UserInDB(
+        username=user_data.username,
+        email=user_data.email,
+        hashed_password=hash_password(user_data.password),
+    )
+    await users_col.insert_one(user.model_dump())
+    logger.info("New user registered", extra={"username": user.username})
+
+    token = create_access_token({"sub": user.username})
+    return Token(access_token=token)
+
+
+@app.post("/auth/token", response_model=Token)
+@limiter.limit("10/minute")
+async def login(http_request: Request, form_data: OAuth2PasswordRequestForm = Depends()):
+    """Authenticate with username + password and return an access token."""
+    users_col = get_users_collection()
+    if users_col is None:
+        raise HTTPException(status_code=503, detail="Database not available")
+
+    user = await users_col.find_one({"username": form_data.username})
+    if not user or not verify_password(form_data.password, user["hashed_password"]):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect username or password",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    logger.info("User logged in", extra={"username": form_data.username})
+    token = create_access_token({"sub": user["username"]})
+    return Token(access_token=token)
+
+
+@app.get("/auth/me")
+async def get_me(current_user: dict = Depends(get_current_user)):
+    """Return the profile of the currently authenticated user."""
+    return {
+        "user_id": current_user["user_id"],
+        "username": current_user["username"],
+        "email": current_user.get("email"),
+        "created_at": current_user.get("created_at"),
+    }
+
+
 @app.post("/api/analyze")
 @limiter.limit("30/minute")
 async def analyze_query(http_request: Request, request: AnalyzeRequest):
@@ -111,7 +176,11 @@ async def analyze_query(http_request: Request, request: AnalyzeRequest):
 
 @app.post("/api/search")
 @limiter.limit("10/minute")
-async def search(request: SearchRequest, http_request: Request):
+async def search(
+    request: SearchRequest,
+    http_request: Request,
+    current_user: Optional[dict] = Depends(get_optional_user),
+):
     """Main search endpoint with caching, ranking, and persistence"""
     start_time = time.time()
     
@@ -221,7 +290,8 @@ async def search(request: SearchRequest, http_request: Request):
                 status=status,
                 results_count=total_results,
                 duration_ms=duration_ms,
-                user_ip=http_request.client.host if http_request.client else None
+                user_ip=http_request.client.host if http_request.client else None,
+                user_id=current_user["user_id"] if current_user else None,
             )
             result = await searches_collection.insert_one(search_record.model_dump())
             response_data["search_id"] = str(result.inserted_id)
@@ -241,18 +311,23 @@ async def search(request: SearchRequest, http_request: Request):
 
 @app.get("/api/history")
 @limiter.limit("30/minute")
-async def get_history(request: Request, limit: int = 50, skip: int = 0):
-    """Get search history with pagination"""
+async def get_history(
+    request: Request,
+    limit: int = 50,
+    skip: int = 0,
+    current_user: dict = Depends(get_current_user),
+):
+    """Get the authenticated user's search history with pagination."""
     try:
         searches_collection = get_searches_collection()
         if searches_collection is None:
             return {"history": [], "total": 0}
-        
-        # Get total count
-        total = await searches_collection.count_documents({})
-        
+
+        user_filter = {"user_id": current_user["user_id"]}
+        total = await searches_collection.count_documents(user_filter)
+
         # Get paginated results
-        cursor = searches_collection.find().sort("timestamp", -1).skip(skip).limit(limit)
+        cursor = searches_collection.find(user_filter).sort("timestamp", -1).skip(skip).limit(limit)
         history = await cursor.to_list(length=limit)
         
         # Convert ObjectId to string for JSON serialization
@@ -272,7 +347,11 @@ async def get_history(request: Request, limit: int = 50, skip: int = 0):
 
 @app.get("/api/analytics")
 @limiter.limit("10/minute")
-async def get_analytics(request: Request, days: int = 7):
+async def get_analytics(
+    request: Request,
+    days: int = 7,
+    current_user: dict = Depends(get_current_user),
+):
     """Get analytics for the dashboard"""
     try:
         searches_collection = get_searches_collection()
@@ -438,8 +517,12 @@ async def get_related_searches(request: Request, query: str, limit: int = 5):
 
 @app.post("/api/saved-searches")
 @limiter.limit("20/minute")
-async def save_search(request: Request, saved_search: SaveSearchRequest):
-    """Save a search for later"""
+async def save_search(
+    request: Request,
+    saved_search: SaveSearchRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    """Save a search for the authenticated user."""
     try:
         saved_searches_collection = get_saved_searches_collection()
         if saved_searches_collection is None:
@@ -449,7 +532,8 @@ async def save_search(request: Request, saved_search: SaveSearchRequest):
             query=saved_search.query,
             filters=saved_search.filters,
             name=saved_search.name,
-            tags=saved_search.tags
+            tags=saved_search.tags,
+            user_id=current_user["user_id"],
         )
         
         result = await saved_searches_collection.insert_one(saved.model_dump())
@@ -464,14 +548,19 @@ async def save_search(request: Request, saved_search: SaveSearchRequest):
 
 @app.get("/api/saved-searches")
 @limiter.limit("30/minute")
-async def get_saved_searches(request: Request):
-    """Get all saved searches"""
+async def get_saved_searches(
+    request: Request,
+    current_user: dict = Depends(get_current_user),
+):
+    """Get the authenticated user's saved searches."""
     try:
         saved_searches_collection = get_saved_searches_collection()
         if saved_searches_collection is None:
             return {"saved_searches": []}
-        
-        cursor = saved_searches_collection.find().sort("created_at", -1)
+
+        cursor = saved_searches_collection.find(
+            {"user_id": current_user["user_id"]}
+        ).sort("created_at", -1)
         saved_searches = await cursor.to_list(length=100)
         
         # Convert ObjectId to string
@@ -486,14 +575,20 @@ async def get_saved_searches(request: Request):
 
 @app.delete("/api/saved-searches/{saved_id}")
 @limiter.limit("20/minute")
-async def delete_saved_search(request: Request, saved_id: str):
-    """Delete a saved search"""
+async def delete_saved_search(
+    request: Request,
+    saved_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    """Delete a saved search belonging to the authenticated user."""
     try:
         saved_searches_collection = get_saved_searches_collection()
         if saved_searches_collection is None:
             raise HTTPException(status_code=503, detail="Database not available")
-        
-        result = await saved_searches_collection.delete_one({"saved_id": saved_id})
+
+        result = await saved_searches_collection.delete_one(
+            {"saved_id": saved_id, "user_id": current_user["user_id"]}
+        )
         
         if result.deleted_count == 0:
             raise HTTPException(status_code=404, detail="Saved search not found")
