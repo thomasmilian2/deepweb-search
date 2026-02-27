@@ -1,4 +1,5 @@
 fastapi==0.104.1
+slowapi==0.1.9
 uvicorn[standard]==0.24.0
 websockets==12.0
 aiohttp==3.9.1

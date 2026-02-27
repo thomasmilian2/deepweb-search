@@ -1,5 +1,8 @@
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 from typing import List, Dict, Callable, Awaitable, Any, Optional
 from datetime import datetime, timedelta
 import asyncio
@@ -22,7 +25,10 @@ from query_analyzer import query_analyzer
 from ranking_service import ranking_service
 from sources import search_duckduckgo
 
+limiter = Limiter(key_func=get_remote_address)
 app = FastAPI(title="DeepWeb Search API", version="2.0.0")
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 _cors_origins = os.getenv("CORS_ORIGINS", "http://localhost:3000").split(",")
 app.add_middleware(
@@ -75,12 +81,14 @@ async def health_check():
     }
 
 @app.post("/api/analyze")
-async def analyze_query(request: AnalyzeRequest):
+@limiter.limit("30/minute")
+async def analyze_query(http_request: Request, request: AnalyzeRequest):
     """Analyze a search query to extract intent, keywords, and suggestions"""
     analysis = query_analyzer.analyze(request.query)
     return {"analysis": analysis}
 
 @app.post("/api/search")
+@limiter.limit("10/minute")
 async def search(request: SearchRequest, http_request: Request):
     """Main search endpoint with caching, ranking, and persistence"""
     start_time = time.time()
@@ -210,7 +218,8 @@ async def search(request: SearchRequest, http_request: Request):
     return response_data
 
 @app.get("/api/history")
-async def get_history(limit: int = 50, skip: int = 0):
+@limiter.limit("30/minute")
+async def get_history(request: Request, limit: int = 50, skip: int = 0):
     """Get search history with pagination"""
     try:
         searches_collection = get_searches_collection()
@@ -240,7 +249,8 @@ async def get_history(limit: int = 50, skip: int = 0):
         return {"history": [], "total": 0}
 
 @app.get("/api/analytics")
-async def get_analytics(days: int = 7):
+@limiter.limit("10/minute")
+async def get_analytics(request: Request, days: int = 7):
     """Get analytics for the dashboard"""
     try:
         searches_collection = get_searches_collection()
@@ -336,7 +346,8 @@ async def get_analytics(days: int = 7):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/suggestions")
-async def get_suggestions(q: str, limit: int = 5):
+@limiter.limit("60/minute")
+async def get_suggestions(request: Request, q: str, limit: int = 5):
     """Get search suggestions based on query history"""
     if not q or len(q) < 2:
         return {"suggestions": []}
@@ -364,7 +375,8 @@ async def get_suggestions(q: str, limit: int = 5):
         return {"suggestions": []}
 
 @app.get("/api/related")
-async def get_related_searches(query: str, limit: int = 5):
+@limiter.limit("30/minute")
+async def get_related_searches(request: Request, query: str, limit: int = 5):
     """Get related searches based on query analysis"""
     if not query:
         return {"related": []}
@@ -403,7 +415,8 @@ async def get_related_searches(query: str, limit: int = 5):
         return {"related": []}
 
 @app.post("/api/saved-searches")
-async def save_search(saved_search: SaveSearchRequest):
+@limiter.limit("20/minute")
+async def save_search(request: Request, saved_search: SaveSearchRequest):
     """Save a search for later"""
     try:
         saved_searches_collection = get_saved_searches_collection()
@@ -428,7 +441,8 @@ async def save_search(saved_search: SaveSearchRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/saved-searches")
-async def get_saved_searches():
+@limiter.limit("30/minute")
+async def get_saved_searches(request: Request):
     """Get all saved searches"""
     try:
         saved_searches_collection = get_saved_searches_collection()
@@ -449,7 +463,8 @@ async def get_saved_searches():
         return {"saved_searches": []}
 
 @app.delete("/api/saved-searches/{saved_id}")
-async def delete_saved_search(saved_id: str):
+@limiter.limit("20/minute")
+async def delete_saved_search(request: Request, saved_id: str):
     """Delete a saved search"""
     try:
         saved_searches_collection = get_saved_searches_collection()
